@@ -164,6 +164,10 @@ class BiPole:
         self.bi_dipole = bi_dipole
 
         def init(field_geometry='bi_dipole'):
+            """
+            input : Field geometry, choose between 'bi_dipole', 'e_dipole' and 'h_dipole'.
+            returns : Field object of specified geometry.
+            """
             if field_geometry == 'bi_dipole':
                 field = hc.PSATDPoissonField(self.grid_size, self.min_coords, self.grid_step, self.t_aux)
                 field.set(bi_dipole)
@@ -184,12 +188,22 @@ class BiPole:
         self.init = init
 
         def update_field(field, timestep=self.t_aux):
+            """
+            input : Field object, time-step (float).
+            Description : Updates the field a timstep forward in time.
+            returns : 0 (None)
+            """
             field.change_time_step(timestep)
             field.update_fields()
             return 0
         self.update_field = update_field
 
         def get_chi_gamma(ensemble, field, ptype=hc.ELECTRON):
+            """
+            input : Particle ensemble, Field object.
+            description : Computes arrays of the chi and gamma factor values for each electorn in the beam.
+            returns : Chi value and gamma factor of every particle in the beam (array).
+            """
             E_schwing = (hc.ELECTRON_MASS**2 * hc.c**3)/(-hc.ELECTRON_CHARGE*hc.PLANCK)
             gamma = np.array([el.get_gamma() for el in ensemble[ptype]])
             e = np.array([ field.get_E(el.get_position()) for el in ensemble[ptype]])
@@ -202,6 +216,9 @@ class BiPole:
 
             
         def run_sfqed(field, beam, track_diagnostic=None, revert_field=False, k1=0.0, k2=0.0):
+            """
+            input : Field object, Particle ensemble, string (optional)
+            """
             if track_diagnostic == 'photons':
                 photon_count = []
                 for _ in range(self.n_iter):
@@ -231,11 +248,10 @@ class BiPole:
                     emissions += bool_array_AND
                 emissions = np.array(emissions)
                 n_single_events = np.count_nonzero(emissions == 1)
-                f_chi = 100*(n_single_events/self.number_e)
                 if revert_field:
                     update_field(field, self.dt_revert)
 
-                return f_chi
+                return n_single_events
                 
             else:
                 if revert_field:
