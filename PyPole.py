@@ -607,7 +607,7 @@ class BiPole:
             figure_tags = ['(a)', '(b)', '(c)', '(d)', '(e)', '(f)']
             XLABEL = 'Electron energy [GeV]'
             YLABEL = 'Average input power [PW]'
-            CBAR_LABEL = '$f_{\chi}$ [%]'
+            CBAR_LABEL = '$r_{\chi} \  [\mathrm{events} / (fs \cdot \mu m^{-3})]$'
 
 
             #fig plotting
