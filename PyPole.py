@@ -10,6 +10,64 @@ class BiPole:
     """ This is a class that contains the Pythonic backend tools that communicate via the pyHiChi package.
     The class itself is specialized to field geometries of the dipole and bi-dipole waves and the interaction
     with uniform electron beams.
+
+    The generation of the bi-dipole pulse is based on the work of https://journals.aps.org/pra/abstract/10.1103/PhysRevA.86.053836 with
+    primary focus on eqs. (23a) and (23b) for the calculation of the electric and magnetic parts of the wave. Further, the driving is assumed
+    quasi-Gaussian in line with eq. (46) of the very same paper.
+
+    Summary of included functions within the BiPole class follows below:
+    |||
+    Quasi-Gaussian driving function, its derivatives and combinations: 
+    These are denoted g, gp (g-prime), gpp (g-prime-prime), gpp_plus (g-prime-prime_+) etc. which correspond to different combination of the driving function and its 
+    derivatives (see e.g. egs. 23a, 23b and the text immidiately below them.)
+    |||
+    Dipole wave expressions:
+    Three functions denoted E_dipole, H_dipole and bi_dipole are listed which makes use of the driving functions in line with eqs. 23a, 23b
+    to compute the analytic expression for these and then return the pyHiChi field object which can later be used to initiate the field
+    onto the grid. E_dipole, H_dipole and bi_dipole work in very similar ways, the only difference is what they return. Often, only bi_dipole is used
+    in practice but the other two can be good to provide sanity checks and debugging.
+    |||
+    The init() function and update_field() functions:
+    The init() function basically sets the analytic field expression onto the specified simulation domain grid (E-H or bi_dipole waves)
+    using the PSATDPoissionField method. This returns a pyHiChi field object that can be propagated and visualized. This brings us to 
+    the update_field() function which, given a timestep, simply updates the field in time with the arbitrarly chosen timestep. The 
+    function itself does not return anything since pyHiChi field objects are not really "replaced" in memory.
+    |||
+    Electron beam generation functions:
+    Here only a uniform stream of electrons are considered. Particles are uniformly distributed within the volume of a cylinder in space and
+    is done via the generate_points() function. It generates coordinate points (x,y,z) randomly distributed which can then be used 
+    for the uniform_electron_beam() function. This function creates a pyHiChi particle ensemble and places electrons within it, with the
+    random coordinates supplied from generate_points(). Each electron is given an input energy that is specified when the BiPole class is
+    initiated and also they have a small jitter around this central value. Each electron are given a momentum based on this energy so
+    it propagates toward the field structure.
+    |||
+    Simulation & analytics:
+    There is a basic function denoted get_chi_gamma() which takes the current field structure and electron beam and then computes
+    the value of both chi and gamma for each electron in the pyHiChi particle ensemble and return these in the form of two arrays.
+    Then there is the central function which constitutes the whole analysis of the effective cross-section, namely run_sfqed(). This
+    function will take as input the initial pyHiChi field and electron beam, then propagate the field and push the particles using the
+    update_field() function described above and the pyHiChi.QED.process_particles(). Both functions use the same timestepping which is 
+    specified at the initiation of the BiPole class. The number (n_iter) of field updates and particle pushes are dictated by the
+    timestepping and how far (spatially) the beam and field should travel. Usually this is twice the radius of a dipole or bi-dipole pulse (see R0).
+
+    There are two settings to choose from; 'photons' or 'events'. The former tracks the number of photons that exist within the simulation
+    domain for each iteration. This is useful to determine the scale of the simulation domain for optimization. The latter ('events') instead
+    tracks the number of particles undergoing high-chi singlet events. It is done so that at each iteration, the chi value is recorded and
+    compared with a threshold value. Then another condition is checked, namely if the difference in energy after emission is greater than 
+    the energy of the electron rest mass. This is done for each electron in the pyHiChi ensemble and thus this is done via arrays. In
+    the end, only the number of particles satisfying this condition only onces during the whole simulation are accounted for and returned.
+    To save time, there is an option to "revert" the field back to its original state before the simulation. This is necessary if one
+    has multiple beams to consider but does not want to create equally many fields (can take long time and is inefficient). By this
+    trick, a single field can be iterated back and forth for each beam that one is interested in.
+
+    WARNING : Normally the pyHiChi.QED.process_particles() does NOT take arguments k1 and k2. Since it was personally modified for
+    the project using Approximate Bayesian Computation (ABC) to determine the most likely parameter k1. To circumvent this if I've not
+    have time to think about the final version of this script; remove thearguments k1 and k2 everywhere in this file and it should run
+    as normal!
+    |||
+    Visualization:
+    
+
     """
 
     def __init__(self, wavelength, R0, P0, a_fac, L_box, number_e_real, number_e, electron_energy, beam_length, spot_radius, dipole_dir='y', thresh=1/4, tstart=0.0):
@@ -167,8 +225,6 @@ class BiPole:
 
                 H_e = h1*(gpp_plus(R)/(self.c*self.c*(R)) + gp_minus(R)/(self.c*(R)**2))
                 E_e = e1*(gpp_minus(R)/((R)*self.c**2))+e2*(gp_plus(R)/(self.c*(R)**2) + g_minus(R)/((R)**3))
-                H_m = E_e
-                E_m = -H_e
 
                 return hc.Field(E_e, H_e)
         
@@ -344,7 +400,7 @@ class BiPole:
                 return beam, photon_count
 
             elif track_diagnostic == 'events':
-                threshold = 1.0 #Multiple of the electron rest mass; is DeltaGamma > mult [in units of rest mass]?
+                threshold = 1.0  #Multiple of the electron rest mass
                 n_particles = beam[hc.ELECTRON].size()
                 chi_max = self.chi_max
                 chi_max_array = chi_max*np.ones(n_particles)
@@ -371,7 +427,7 @@ class BiPole:
                 return beam
         self.run_sfqed = run_sfqed
 
-        def generate_points(length, radius, distribution='normal'):
+        def generate_points(length, radius):
             """[Generates beam coordinate points uniformally in the beam propagation direction and circularly or normally distributed in the transverse direction depending on the distribution parameter]
             :param length: length of the particle beam
             :type length: float
@@ -382,20 +438,13 @@ class BiPole:
             :return: beam coordinate points according to specified transverse distribution
             :rtype: tuple of floats
             """
-            if distribution == 'normal':
-                spread = radius/(np.sqrt(2*np.log(2))) 
-                y, z = np.random.normal(0.0,spread), np.random.normal(0.0,spread)
-                return (length/2)*np.random.uniform(-1,1), y, z
-            elif distribution == 'uniform':
-                length_circ = np.sqrt(np.random.uniform(0,1))
-                angle = np.pi*np.random.uniform(0,2)
-                return (length/2)*np.random.uniform(-1,1), length_circ*np.cos(angle)*radius, length_circ*np.sin(angle)*radius
-            else:
-                print('Unknown distribution, check PyPole.py')
-                return 0
+            length_circ = np.sqrt(np.random.uniform(0,1))
+            angle = np.pi*np.random.uniform(0,2)
+            return (length/2)*np.random.uniform(-1,1), length_circ*np.cos(angle)*radius, length_circ*np.sin(angle)*radius
+
         self.generate_points = generate_points
 
-        def uniform_electron_beam(input_erg=self.electron_energy, no_eons=self.number_e, distribution='uniform'):
+        def uniform_electron_beam(input_erg=self.electron_energy, no_eons=self.number_e):
             """[Creates a particle beam using a specified distribution]
             :param input_erg: input energy for each particle in the beam
             :type input_erg: float
@@ -407,27 +456,14 @@ class BiPole:
             :rtype: pyHiChi ensemble object
             """
             beam = hc.Ensemble()
-            if distribution == 'normal':
-                while(beam[hc.ELECTRON].size() < no_eons):
-                    x, y, z = generate_points(beam_length, spot_radius, distribution=distribution)
-                    randcoord = hc.Vector3d(self.distance_start+x, y, z)
-                    if hp.block(randcoord.y, self.min_coords.y, self.max_coords.y) == 0 or hp.block(randcoord.z, self.min_coords.z, self.max_coords.z) == 0:
-                        continue
-                    dE = input_erg*(1+0.001*np.random.random())
-                    mo_val = np.sqrt(((dE)/self.c)**2 - (self.me*self.c)**2)
-                    mo = hc.Vector3d(-mo_val, 0.0, 0.0)        
-                    particle = hc.Particle(randcoord, mo, self.weight, hc.ELECTRON)
-                    beam.add(particle)
-
-            elif distribution == 'uniform':
-                for _ in range(no_eons):
-                    y, x, z = generate_points(self.beam_length, self.spot_radius, distribution=distribution)
-                    randcoord = hc.Vector3d(x, self.distance_start+y, z)
-                    dE = input_erg*(1+0.001*np.random.random())
-                    mo_val = np.sqrt(((dE)/self.c)**2 - (self.me*self.c)**2)
-                    mo = hc.Vector3d(0.0, -mo_val, 0.0)        
-                    particle = hc.Particle(randcoord, mo, self.weight, hc.ELECTRON)
-                    beam.add(particle)
+            for _ in range(no_eons):
+                z, x, y = generate_points(self.beam_length, self.spot_radius)
+                randcoord = hc.Vector3d(x, y, self.distance_start+z)
+                dE = input_erg*(1+0.001*np.random.random())
+                mo_val = np.sqrt(((dE)/self.c)**2 - (self.me*self.c)**2)
+                mo = hc.Vector3d(0.0, 0.0, -mo_val)        
+                particle = hc.Particle(randcoord, mo, self.weight, hc.ELECTRON)
+                beam.add(particle)
             
             return beam
         self.uniform_electron_beam = uniform_electron_beam
@@ -515,7 +551,6 @@ class BiPole:
                 cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
                 XLABEL = 'x'+' '+'$[\\mu m]$'
                 YLABEL = 'y'+' '+'$[\\mu m]$'
-                TITLE = 'Cross sectional plot of electric field strength'
                 if show_beam:
                     x, y = [], []
                     for el in parray[ptype]:
@@ -532,7 +567,6 @@ class BiPole:
                 cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
                 XLABEL = 'y'+' '+'$[\\mu m]$'
                 YLABEL = 'z'+' '+'$[\\mu m]$'
-                TITLE = 'Electric field strength in the yz-plane'
                 if show_beam:
                     y, z = [], []
                     for el in parray[ptype]:
@@ -549,7 +583,6 @@ class BiPole:
                 cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
                 XLABEL = 'x'+' '+'$[\\mu m]$'
                 YLABEL = 'z'+' '+'$[\\mu m]$'
-                TITLE = 'Electric field strength in the xz-plane'
                 if show_beam:
                     x, z = [], []
                     for el in parray[ptype]:
@@ -560,9 +593,8 @@ class BiPole:
 
             ax.set_xlabel(XLABEL, fontsize=fsize)
             ax.set_ylabel(YLABEL, fontsize=fsize)
-            ax.set_title(TITLE, fontsize=fsize)
             ax.tick_params(axis='both', labelsize=fsize)
-            cbar.set_label('Electric field strength [arb. units]', fontsize=fsize)
+            cbar.set_label('Electric field strength [norm. units]', fontsize=fsize)
             fig.tight_layout()
 
             if save_fig:
